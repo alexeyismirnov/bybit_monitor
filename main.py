@@ -2,22 +2,19 @@ import asyncio
 import re
 import logging
 import os
+import base64
+import tempfile
 from datetime import datetime
 from telethon import TelegramClient, events
 import requests
-import json
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Configure logging for Railway
 logging.basicConfig(
     level=logging.INFO, 
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # Console output for Railway logs
-    ]
+    handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -29,16 +26,18 @@ class TelegramChannelMonitor:
         self.phone_number = os.getenv('TELEGRAM_PHONE')
         self.bot_token = os.getenv('BOT_TOKEN')
         self.target_channel_id = os.getenv('TARGET_CHANNEL_ID')
+        self.session_data = os.getenv('TELEGRAM_SESSION_DATA')  # Base64 encoded session
         
         # Validate required environment variables
         required_vars = [
             'TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'TELEGRAM_PHONE',
-            'BOT_TOKEN', 'TARGET_CHANNEL_ID'
+            'BOT_TOKEN', 'TARGET_CHANNEL_ID', 'TELEGRAM_SESSION_DATA'
         ]
         
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         if missing_vars:
             raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+        
         
         # Monitoring settings
         self.source_channels = ['@Bybit_Announcements', '@varlamov_news']
@@ -49,19 +48,76 @@ class TelegramChannelMonitor:
             'New', 'Listing', 'Perpetual', 'Contract'
         ]
         
-        # Anti-spam tracking
-        self.sent_messages = set()
+        self.client = None
+        self.session_file_path = None
         
-        logger.info("✅ TelegramChannelMonitor initialized with environment variables")
+        self.sent_messages = set()
+        logger.info("✅ TelegramChannelMonitor initialized with session data")
+
+    def create_session_file(self):
+        """Create session file from base64 encoded data"""
+        try:
+            # Decode base64 session data
+            session_bytes = base64.b64decode(self.session_data)
+            
+            # Create temporary session file
+            temp_dir = tempfile.gettempdir()
+            self.session_file_path = os.path.join(temp_dir, 'railway_session')
+            
+            # Write session data to file
+            with open(f"{self.session_file_path}.session", 'wb') as f:
+                f.write(session_bytes)
+            
+            logger.info("✅ Session file created from environment data")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create session file: {e}")
+            return False
 
     async def initialize_client(self):
-        """Initialize and authenticate Telethon client"""
-        # Use Railway's ephemeral storage for session
-        session_name = '/tmp/monitoring_session'
-        
-        self.client = TelegramClient(session_name, self.api_id, self.api_hash)
-        await self.client.start(phone=self.phone_number)
-        logger.info("✅ Telethon client initialized and authenticated")
+        """Initialize Telethon client with pre-authenticated session"""
+        try:
+            # Create session file from environment variable
+            if not self.create_session_file():
+                raise Exception("Failed to create session file")
+            
+            # Initialize client with session file
+            self.client = TelegramClient(
+                self.session_file_path, 
+                self.api_id, 
+                self.api_hash,
+                device_model="Railway Server",
+                system_version="Linux",
+                app_version="1.0"
+            )
+            
+            # Connect without interactive authentication
+            await self.client.connect()
+            
+            # Verify authentication
+            if not await self.client.is_user_authorized():
+                raise Exception("Session is not authorized - please re-create session locally")
+            
+            # Get user info to confirm connection
+            me = await self.client.get_me()
+            logger.info(f"✅ Authenticated as: {me.first_name} {me.last_name or ''}")
+            logger.info("✅ Telethon client initialized successfully")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Client initialization failed: {e}")
+            return False
+
+    def cleanup_session_file(self):
+        """Clean up temporary session file"""
+        try:
+            if self.session_file_path and os.path.exists(f"{self.session_file_path}.session"):
+                os.remove(f"{self.session_file_path}.session")
+                logger.info("🧹 Temporary session file cleaned up")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not clean up session file: {e}")
 
     def send_to_bot_channel(self, message_text, original_message_id=None):
         """Send message to your private channel using bot API"""
@@ -75,7 +131,7 @@ class TelegramChannelMonitor:
 📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
 🔗 Source: Bybit Official Channel
 {'🆔 Message ID: ' + str(original_message_id) if original_message_id else ''}
-🤖 Deployed on Railway
+🤖 Railway Deployment
         """.strip()
         
         payload = {
@@ -104,7 +160,7 @@ class TelegramChannelMonitor:
         
         return True
         message_lower = message_text.lower()
-        return all(keyword.lower() in message_lower for keyword in self.filter_keywords)
+        return any(keyword.lower() in message_lower for keyword in self.filter_keywords)
 
     async def setup_channel_monitoring(self):
         """Set up message monitoring for specified channels"""
@@ -146,7 +202,6 @@ class TelegramChannelMonitor:
                 if success:
                     self.sent_messages.add(message_hash)
                     
-                    # Prevent memory bloat
                     if len(self.sent_messages) > 1000:
                         self.sent_messages = set(list(self.sent_messages)[500:])
                         
@@ -158,10 +213,12 @@ class TelegramChannelMonitor:
         try:
             logger.info("🚀 Starting Telegram Bybit Monitor on Railway...")
             
-            await self.initialize_client()
+            # Initialize client with pre-authenticated session
+            if not await self.initialize_client():
+                raise Exception("Failed to initialize Telegram client")
             
             # Test bot connection
-            test_message = "🤖 Bybit Monitor Started on Railway!\n\nMonitoring channels for updates..."
+            test_message = "🤖 Bybit Monitor Started on Railway!\n\n✅ Pre-authenticated session loaded\n🎯 Monitoring channels for updates..."
             if not self.send_to_bot_channel(test_message):
                 logger.error("❌ Bot connection test failed")
                 return
@@ -174,11 +231,11 @@ class TelegramChannelMonitor:
             
         except Exception as e:
             logger.error(f"❌ Fatal error: {e}")
-            # Railway will restart the service automatically
             raise e
         finally:
             if self.client:
                 await self.client.disconnect()
+            self.cleanup_session_file()
 
 async def main():
     """Main function for Railway deployment"""
@@ -187,7 +244,6 @@ async def main():
         await monitor.start_monitoring()
     except Exception as e:
         logger.error(f"❌ Application failed to start: {e}")
-        # Exit with error code so Railway can restart
         exit(1)
 
 if __name__ == '__main__':
