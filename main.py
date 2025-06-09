@@ -40,7 +40,7 @@ class TelegramChannelMonitor:
         
         
         # Monitoring settings
-        self.source_channels = ['@Bybit_Announcements', '@varlamov_news']
+        self.source_channels = ['@Bybit_Announcements']
         self.client = None
         
         # Filtering keywords
