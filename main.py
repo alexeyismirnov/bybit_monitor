@@ -158,9 +158,8 @@ class TelegramChannelMonitor:
         if not message_text or len(message_text.strip()) < 20:
             return False
         
-        return True
         message_lower = message_text.lower()
-        return any(keyword.lower() in message_lower for keyword in self.filter_keywords)
+        return all(keyword.lower() in message_lower for keyword in self.filter_keywords)
 
     async def setup_channel_monitoring(self):
         """Set up message monitoring for specified channels"""
