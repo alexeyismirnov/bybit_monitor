@@ -40,12 +40,12 @@ class TelegramChannelMonitor:
         
         
         # Monitoring settings
-        self.source_channels = ['@Bybit_Announcements']
+        self.source_channels = ['@Bybit_Announcements', '@intelligent_trading_signals']
         self.client = None
         
         # Filtering keywords
         self.filter_keywords = [
-            'New', 'Listing', 'Perpetual', 'Contract'
+            'Perpetual Contract', 'SOLD:  Profit', 'BOUGHT:  Profit'
         ]
         
         self.client = None
@@ -159,7 +159,7 @@ class TelegramChannelMonitor:
             return False
         
         message_lower = message_text.lower()
-        return all(keyword.lower() in message_lower for keyword in self.filter_keywords)
+        return any(keyword.lower() in message_lower for keyword in self.filter_keywords)
 
     async def setup_channel_monitoring(self):
         """Set up message monitoring for specified channels"""
